@@ -1,0 +1,29 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Model outputs (Keep essential ones, ignore broken huge one)
+output_mask.png
+*.h5
+*.keras
+*.pth
+!intelliscan backend/resnet_model.pth
+!intelliscan backend/best_model.keras
+intelliscan backend/static_mask/*.png
+!intelliscan backend/static_mask/.gitkeep
+intelliscan backend/archive_masks/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node / React
+node_modules/
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
