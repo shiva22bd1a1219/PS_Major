@@ -16,7 +16,14 @@ def train_resnet():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     
-    train_dir = "C:/Users/Shiva/Desktop/mlml/PS!major/intelliscan/intelliscan backend/archive/Training"
+    # Updated to use relative path to avoid machine-specific errors
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    train_dir = os.path.join(BASE_DIR, "archive/Training")
+    
+    if not os.path.exists(train_dir):
+        print(f"Error: Training directory {train_dir} not found. Please restore the archive folder to train.")
+        return
+
     dataset = datasets.ImageFolder(train_dir, transform=transform)
     
     # 200 per class for lightning fast training
@@ -53,8 +60,9 @@ def train_resnet():
             
         print(f"Epoch {epoch+1}/4 - Loss: {running_loss/len(dataloader):.4f} - Acc: {100 * correct / total:.2f}%")
         
-    torch.save(model.state_dict(), "C:/Users/Shiva/Desktop/mlml/PS!major/intelliscan/intelliscan backend/resnet_model.pth")
-    print("ResNet model saved!")
+    save_path = os.path.join(BASE_DIR, "resnet_model.pth")
+    torch.save(model.state_dict(), save_path)
+    print(f"ResNet model saved to {save_path}!")
 
 if __name__ == "__main__":
     train_resnet()

@@ -23,6 +23,9 @@ pip install -r requirements.txt
 
 python run_mode.py
 
+> [!NOTE]
+> **Model Weights**: The essential model weight (`resnet_model.pth`) is already included in the repository. You do not need to download it separately.
+
 ## Frontend Setup
 
 1. Open terminal inside frontend folder

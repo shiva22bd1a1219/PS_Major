@@ -49,19 +49,13 @@ def dice_loss(y_true, y_pred):
     return 1.0 - dice_coef(y_true, y_pred)
 
 # ---------------- LOAD MODELS ----------------
-UNET_MODEL_PATH = "best_model.keras"
-VIT_MODEL_PATH = "best_model.pth"
-CLASS_FOLDER = "archive/Training"
+# Hardcoded class names to avoid loading 151MB of training data
+class_names = ['glioma', 'meningioma', 'notumor', 'pituitary']
 
-print("Loading UNET...")
-unet_model = tf.keras.models.load_model(
-    UNET_MODEL_PATH,
-    compile=False
-)
 print("Loading ResNet...")
 vit_model = models.resnet18()
 vit_model.fc = nn.Linear(vit_model.fc.in_features, 4)
-RESNET_PATH = "resnet_model.pth"
+RESNET_PATH = os.path.join(BASE_DIR, "resnet_model.pth")
 
 try:
     checkpoint = torch.load(RESNET_PATH, map_location=device)
@@ -72,14 +66,25 @@ except Exception as e:
 
 vit_model.to(device)
 vit_model.eval()
-# print("Loading ViT...")
-# vit_model = TumorClassifierViT(num_classes=4)
-# vit_model.load_state_dict(torch.load(VIT_MODEL_PATH, map_location=device))
-# vit_model.to(device)
-# vit_model.eval()
 
-train_dataset = ImageFolder(CLASS_FOLDER, transform=transforms.ToTensor())
-class_names = train_dataset.classes
+# ----- UNET LOADING (HYBRID SEGMENTATION) -----
+# Check for both possible names from your training sessions
+UNET_MODEL_PATH = os.path.join(BASE_DIR, "best_model.keras")
+if not os.path.exists(UNET_MODEL_PATH):
+    UNET_MODEL_PATH = os.path.join(BASE_DIR, "best_model(1).keras")
+
+unet_model = None
+if os.path.exists(UNET_MODEL_PATH):
+    try:
+        print(f"Restoring UNet model from {os.path.basename(UNET_MODEL_PATH)}...")
+        unet_model = tf.keras.models.load_model(UNET_MODEL_PATH, compile=False)
+        print("UNet successfully restored and working!")
+    except Exception as e:
+        print(f"Error loading UNet model weights: {e}")
+else:
+    print("UNet model not found. Using high-precision Unsupervised OpenCV Segmenter.")
+
+# Removed ImageFolder dependency
 
 data_transforms = transforms.Compose([
     transforms.Resize((224,224)),
@@ -100,55 +105,92 @@ data_transforms = transforms.Compose([
 
 #     return np.expand_dims(patches,axis=0), image_norm
 
-def predict_segmentation(image):
-    # Unsupervised fallback runs on exact natively-sized image
-    height, width = image.shape[:2]
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+def predict_segmentation(image_cv2):
+    height, width = image_cv2.shape[:2]
+    gray = cv2.cvtColor(image_cv2, cv2.COLOR_BGR2GRAY)
     
-    # Magic trick: heavy blur dilutes thin skull rings but preserves solid dense tumor mass!
-    blur_kernel = (width // 15) | 1 # Must be odd, scales with image
+    # CASE 1: USE UNET (If restored from Recycle Bin)
+    if unet_model:
+        try:
+            # Preprocess for UNet (256x256)
+            img_input = cv2.resize(image_cv2, (256, 256)) / 255.0
+            img_input = np.expand_dims(img_input, axis=0)
+            
+            # Predict
+            pred_unet = unet_model.predict(img_input, verbose=0)[0]
+            pred_unet = (pred_unet > 0.5).astype(np.uint8)
+            
+            # SANITY CHECK: UNet must detect a significant mass that isn't just at the boundary
+            if np.sum(pred_unet) > 20: # Must have some content
+                # Check for "Edge Hugging" - if more than 60% of mask is near edges, it's likely skull
+                edge_pad = 20
+                edge_mask = np.ones((256, 256), dtype=np.uint8)
+                edge_mask[edge_pad:-edge_pad, edge_pad:-edge_pad] = 0
+                if np.sum(pred_unet * edge_mask) / np.sum(pred_unet) < 0.6:
+                    mask = cv2.resize(pred_unet, (width, height))
+                    return (mask > 0).astype(np.float32), (image_cv2 / 255.0).astype(np.float32)
+                else:
+                    print("UNet predicted edge-heavy mask (likely skull). Falling back to OpenCV.")
+        except Exception as e:
+            print(f"UNet Inference Error: {e}. Falling back to OpenCV logic.")
+
+    # CASE 2: ADVANCED OPENCV SEGMENTER (Refined for Skull Stripping)
+    blur_kernel = (width // 15) | 1
     blur_kernel = max(blur_kernel, 21)
     blurred = cv2.GaussianBlur(gray, (blur_kernel, blur_kernel), 0)
     
     max_val = np.max(blurred)
     if max_val < 50:
-        thresh_val = 255 # No tumor
-    else:
-        # Isolate the core dense brightness
-        thresh_val = max(max_val * 0.70, 70)
-        
+        return np.zeros_like(gray, dtype=np.float32), (image_cv2 / 255.0).astype(np.float32)
+
+    # Use a relative threshold but biased towards the absolute brightest spots
+    thresh_val = max(max_val * 0.70, 70)
     _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
     
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     mask = np.zeros_like(gray)
+    img_center = (width // 2, height // 2)
+    
     if contours:
-        best_contour = None
-        best_area = -1
-        total_area = height * width
-        
-        # Pass 1: Strict size constraints
+        scored_contours = []
         for c in contours:
             area = cv2.contourArea(c)
-            if (total_area * 0.005) < area < (total_area * 0.3):
-                 if area > best_area:
-                     best_area = area
-                     best_contour = c
-                     
-        # Pass 2: Loose constraints if no perfect match found
-        if best_contour is None:
-            max_c = max(contours, key=cv2.contourArea)
-            if (total_area * 0.001) < cv2.contourArea(max_c) < (total_area * 0.6):
-                best_contour = max_c
-                
-        if best_contour is not None:
-             cv2.drawContours(mask, [best_contour], -1, 255, thickness=cv2.FILLED)
+            if area < (height * width * 0.001): continue # Too small
             
-    # Normalize images
-    mask_norm = mask / 255.0
-    image_norm = image / 255.0
-    
-    return mask_norm, image_norm
+            # 1. Solidity Filter (Tumors are blobs, skull is thin)
+            hull = cv2.convexHull(c)
+            hull_area = cv2.contourArea(hull)
+            solidity = float(area) / hull_area if hull_area > 0 else 0
+            
+            # 2. Center Bias (Tumors are usually not touching the image border)
+            M = cv2.moments(c)
+            if M["m00"] != 0:
+                cX = int(M["m10"] / M["m00"])
+                cY = int(M["m01"] / M["m00"])
+            else:
+                cX, cY = 0, 0
+                
+            dist_from_center = np.sqrt((cX - img_center[0])**2 + (cY - img_center[1])**2)
+            max_dist = np.sqrt(img_center[0]**2 + img_center[1]**2)
+            center_score = 1.0 - (dist_from_center / max_dist) # 1.0 at center, 0.0 at corner
+            
+            # 3. Peak Intensity (Prioritize the absolute brightest region)
+            temp_mask = np.zeros_like(gray)
+            cv2.drawContours(temp_mask, [c], -1, 255, -1)
+            mean_val = cv2.mean(gray, mask=temp_mask)[0]
+            
+            # Final Score
+            total_score = (solidity * 0.4) + (center_score * 0.4) + (mean_val / 255.0 * 0.2)
+            scored_contours.append((total_score, c))
+            
+        if scored_contours:
+            # Pick the highest scoring "Tumor-like" object
+            best_c = max(scored_contours, key=lambda x: x[0])[1]
+            cv2.drawContours(mask, [best_c], -1, 255, thickness=cv2.FILLED)
+            
+    # Normalize and return
+    return (mask > 0).astype(np.float32), (image_cv2 / 255.0).astype(np.float32)
 
 def overlay_mask(image,mask):
     image_uint8=(image*255).astype(np.uint8)

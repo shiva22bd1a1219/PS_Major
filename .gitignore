@@ -3,9 +3,14 @@ venv/
 __pycache__/
 *.pyc
 
-*.pth
-static_mask/
-archive/
+# Temp / Output Files
+intelliscan/intelliscan backend/static_mask/
+intelliscan/intelliscan backend/archive_masks/
+!intelliscan/intelliscan backend/static_mask/.gitkeep
+
+# Local Training Data (Keep on computer, but do not push to GitHub)
+intelliscan/intelliscan backend/archive/
+intelliscan/intelliscan training/
 # Frontend
 node_modules/
 dist/

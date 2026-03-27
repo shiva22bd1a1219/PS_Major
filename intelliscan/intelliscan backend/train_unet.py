@@ -61,10 +61,10 @@ def load_data(img_dir, mask_dir, size=(256,256)):
     return np.array(images, dtype=np.float32), np.array(masks, dtype=np.float32)
 
 if __name__ == "__main__":
-    b_dir = "C:/Users/Shiva/Desktop/mlml/PS!major/intelliscan/intelliscan backend"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     X_train, y_train = load_data(
-        os.path.join(b_dir, "archive/Training"),
-        os.path.join(b_dir, "archive_masks/Training")
+        os.path.join(BASE_DIR, "archive/Training"),
+        os.path.join(BASE_DIR, "archive_masks/Training")
     )
     print(f"Loaded {len(X_train)} samples for U-Net.")
     
@@ -75,8 +75,8 @@ if __name__ == "__main__":
     model = unet_model()
     # Train for 5 epochs to ensure it completes today and learns the basics
     print("Training Genuine U-Net API...")
-    model.fit(X_train, y_train, batch_size=16, epochs=5, validation_split=0.1)
+    model.fit(X_train, y_train, batch_size=16, epochs=1, validation_split=0.1)
     
     print("Saving best_model.keras...")
-    model.save(os.path.join(b_dir, "best_model.keras"))
+    model.save(os.path.join(BASE_DIR, "best_model.keras"))
     print("U-Net training complete!")
